@@ -1,0 +1,136 @@
+## This is a basic workflow to help you get started with Actions
+
+## Warning:                The following GitHub Secrets must be configured for this GitHub Action to work
+##                         AWS_DEFAULT_ACCOUNT, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+##                         AWS_DEFAULT_PROFILE, AWS_DEFAULT_REGION, AWS_ACCESS_KEYPAIR
+
+name:                      GitHub Actions - Terraform
+
+## Controls when the action will run. Triggers the workflow on push or pull request
+## events but only for the master branch
+on:
+  push:
+    branches:              [ master ]
+    paths-ignore:
+    - '.github/**'
+    - '*.md'
+
+env:
+
+  terraform_download:          releases.hashicorp.com/terraform
+  terraform_version:           0.12.29
+  terraform_platform:          linux_amd64
+  terraform_s3bucket:          terraform-states-${{ secrets.AWS_DEFAULT_ACCOUNT }}
+  terraform_workspace:         $(cat ${GITHUB_WORKSPACE}/workspace)
+  terraform_planfile:          $(cat ${GITHUB_WORKSPACE}/workspace)/deploy.tfplan
+
+  awscli_credentials:          ${GITHUB_WORKSPACE}/access/credentials
+  awscli_download:             awscli.amazonaws.com
+  awscli_keypair:              ${GITHUB_WORKSPACE}/access/keypair
+  awscli_platform:             linux-x86_64
+
+  AWS_SHARED_CREDENTIALS_FILE: ${GITHUB_WORKSPACE}/access/credentials
+  AWS_DEFAULT_PROFILE:         ${{ secrets.AWS_DEFAULT_PROFILE }}
+  AWS_DEFAULT_REGION:          ${{ secrets.AWS_DEFAULT_REGION }}
+  AWS_ACCESS_KEY_ID:           ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY:       ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  validate:
+
+    # The type of runner that the job will run on
+    runs-on:               ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+    # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+    - uses:                actions/checkout@v2
+
+    ## Installing AWS CLI
+    - name:                Installing AWS CLI
+      env:
+        awscli_package:    awscli-exe-${{ env.awscli_platform }}.zip
+      run:                 |
+        curl --silent "https://${{ env.awscli_download }}/${{ env.awscli_package }}" -o "awscliv2.zip";
+        unzip awscliv2.zip 1>/dev/null;
+        sudo ./aws/install -i /usr/local/aws-cli -b /usr/local/bin;
+
+    ## Inspecting AWS CLI
+    - name:                Inpsecting AWS CLI
+      run:                 |
+        aws --version;
+
+    ## Testing AWS CLI
+    - name:                Testing AWS CLI
+      run:                 |
+        aws configure list;
+        aws iam list-users;
+
+    ## Downloading Terraform
+    - name:                Downloading Terraform
+      env:
+        terraform_package: terraform_${{ env.terraform_version }}_${{ env.terraform_platform }}.zip
+      run:                 |
+        wget --quiet https://${{ env.terraform_download }}/${{ env.terraform_version }}/${{ env.terraform_package }} -P /tmp/;
+        unzip /tmp/${{ env.terraform_package }};
+        chmod 0754 ./terraform;
+        sudo mv ./terraform /usr/local/bin/;
+        which terraform;
+        terraform --version;
+
+    ## Initializing Terraform
+    - name:                Initializing Terraform
+      run:                 |
+        terraform init;
+
+    ## Terraform Workspace
+    - name:                Terraform Workspace
+      run:                 |
+        terraform workspace new ${{ env.terraform_workspace }};
+
+    ## Checks that all Terraform configuration files adhere to a canonical format
+    - name:                Terraform Formatting-Check
+      run:                 |
+        terraform fmt -check;
+
+    ## Validating & Testing Terraaform
+    - name:                Validating & Testing Terraaform
+      run:                 |
+        terraform validate;
+
+    ## ## Generating Terraform Plan
+    - name:                Generating Terraform Plan
+      run:                 |
+        terraform plan -out ${GITHUB_WORKSPACE}/terraform.tfstate.d/${{ env.terraform_planfile }};
+
+    ## Applying Terraform Plan
+    - name:                Applying Terraform Plan
+      run:                 |
+        echo -en "${{ secrets.AWS_ACCESS_KEYPAIR }}" > ${{ env.awscli_keypair }};
+        ls -al ${{ env.awscli_keypair }};
+        terraform apply -input=false ${GITHUB_WORKSPACE}/terraform.tfstate.d/${{ env.terraform_planfile }};
+
+    ## Displaying Terraform Configuration
+    - name:                Displaying Terraform Configuration
+      run:                 |
+        terraform show | tee ${GITHUB_WORKSPACE}/terraform.show;
+
+    ## Uploading Terraform Plan
+    - name:                Uploading Terraform Plan
+      run:                 |
+        aws s3 cp ${GITHUB_WORKSPACE}/terraform.tfstate.d s3://${{ env.terraform_s3bucket }}/ --recursive &>/dev/null;
+        aws s3 cp ${GITHUB_WORKSPACE}/terraform.show s3://${{ env.terraform_s3bucket }}/${{ env.terraform_workspace }}/ &>/dev/null;
+        echo -e "Listing Terraform State components ...";
+        aws s3 ls s3://${{ env.terraform_s3bucket }} --recursive ;
+
+    ## Describing Elastic LoadBalancer
+    - name:                Describing Elastic LoadBalancer
+      run:                 |
+        aws elb describe-load-balancers --load-balancer-name ${{ env.terraform_workspace }}-nginx-elb;
+
+    ## Destroying Terraform Plan
+    - name:                Destroying Terraform Plan
+      run:                 |
+        terraform destroy -auto-approve;
