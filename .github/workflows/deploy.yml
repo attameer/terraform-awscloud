@@ -112,7 +112,7 @@ jobs:
 
     ## Applying Terraform Plan
     - name:                Applying Terraform Plan
-      if: env.terraform_deploy == 'true'
+      if: github.ref == 'refs/heads/master' && github.event_name == 'push' && env.terraform_deploy == 'true'
       run:                 |
         echo -en "${{ secrets.AWS_ACCESS_KEYPAIR }}" > ${{ env.awscli_keypair }};
         ls -al ${{ env.awscli_keypair }};
@@ -141,6 +141,6 @@ jobs:
 
     ## Destroying Terraform Plan
     - name:                Destroying Terraform Plan
-      if: env.terraform_deploy == 'true'
+      if: github.ref == 'refs/heads/master' && github.event_name == 'push' && env.terraform_deploy == 'true'
       run:                 |
         terraform destroy -auto-approve;
